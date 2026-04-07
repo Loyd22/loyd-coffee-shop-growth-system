@@ -2,17 +2,14 @@
 
 "use client";
 
-// We use useState for selected files and validation results
 import { useState } from "react";
 
-// This type matches one issue returned by the API
 type ValidationIssue = {
   row: number | "header" | "file";
   field: string;
   message: string;
 };
 
-// This type matches one file validation result returned by the API
 type FileValidationResult = {
   label: string;
   fileName: string;
@@ -22,42 +19,41 @@ type FileValidationResult = {
   issues: ValidationIssue[];
 };
 
+type SaveSummary = {
+  branchesSaved: number;
+  productsSaved: number;
+  customersSaved: number;
+  transactionsSaved: number;
+  transactionItemsSaved: number;
+};
+
 export default function UploadForm() {
-  // Store selected files
   const [transactionsFile, setTransactionsFile] = useState<File | null>(null);
   const [customersFile, setCustomersFile] = useState<File | null>(null);
   const [productsFile, setProductsFile] = useState<File | null>(null);
   const [branchesFile, setBranchesFile] = useState<File | null>(null);
 
-  // Store loading state
   const [loading, setLoading] = useState(false);
-
-  // Store top-level success or error message
   const [message, setMessage] = useState("");
-
-  // Store whether the top message is an error
   const [isError, setIsError] = useState(false);
-
-  // Store whether all files are valid
   const [allValid, setAllValid] = useState<boolean | null>(null);
-
-  // Store per-file validation results
+  const [saved, setSaved] = useState<boolean | null>(null);
   const [results, setResults] = useState<FileValidationResult[]>([]);
+  const [saveSummary, setSaveSummary] = useState<SaveSummary | null>(null);
 
-  // This handles form submit
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    // Reset previous UI state
     setMessage("");
     setIsError(false);
     setAllValid(null);
+    setSaved(null);
     setResults([]);
+    setSaveSummary(null);
 
     setLoading(true);
 
     try {
-      // Build the form data for file upload
       const formData = new FormData();
 
       if (transactionsFile) {
@@ -76,7 +72,6 @@ export default function UploadForm() {
         formData.append("branchesFile", branchesFile);
       }
 
-      // Send files to validation API
       const response = await fetch("/api/upload-csv", {
         method: "POST",
         body: formData,
@@ -84,24 +79,24 @@ export default function UploadForm() {
 
       const data = await response.json();
 
-      // Handle server-side failure
       if (!response.ok || !data.success) {
         setIsError(true);
-        setMessage(data.message || "Validation failed.");
+        setMessage(data.message || "Upload failed.");
         return;
       }
 
-      // Show validation results
       setIsError(false);
-      setMessage(data.message || "Validation completed.");
+      setMessage(data.message || "Process completed.");
       setAllValid(data.allValid ?? null);
+      setSaved(data.saved ?? null);
       setResults(data.results || []);
+      setSaveSummary(data.saveSummary || null);
     } catch (error) {
       setIsError(true);
       setMessage(
         error instanceof Error
           ? error.message
-          : "Something went wrong while validating the files."
+          : "Something went wrong while uploading and saving."
       );
     } finally {
       setLoading(false);
@@ -110,10 +105,8 @@ export default function UploadForm() {
 
   return (
     <div className="space-y-6">
-      {/* Upload form */}
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="grid gap-6 xl:grid-cols-2">
-          {/* Transactions CSV */}
           <div className="rounded-xl border bg-white p-6 shadow-sm">
             <label className="mb-2 block text-sm font-semibold">
               Transactions CSV
@@ -124,10 +117,6 @@ export default function UploadForm() {
               onChange={(e) => setTransactionsFile(e.target.files?.[0] ?? null)}
               className="block w-full text-sm"
             />
-            <p className="mt-2 text-xs text-gray-500">
-              Example required fields: transaction_id, branch_id, product_id,
-              quantity, price, total_amount, transaction_date
-            </p>
             {transactionsFile && (
               <p className="mt-2 text-sm text-gray-700">
                 Selected: {transactionsFile.name}
@@ -135,7 +124,6 @@ export default function UploadForm() {
             )}
           </div>
 
-          {/* Customers CSV */}
           <div className="rounded-xl border bg-white p-6 shadow-sm">
             <label className="mb-2 block text-sm font-semibold">
               Customers CSV
@@ -146,9 +134,6 @@ export default function UploadForm() {
               onChange={(e) => setCustomersFile(e.target.files?.[0] ?? null)}
               className="block w-full text-sm"
             />
-            <p className="mt-2 text-xs text-gray-500">
-              Example required fields: customer_id, customer_name, email, phone
-            </p>
             {customersFile && (
               <p className="mt-2 text-sm text-gray-700">
                 Selected: {customersFile.name}
@@ -156,7 +141,6 @@ export default function UploadForm() {
             )}
           </div>
 
-          {/* Products CSV */}
           <div className="rounded-xl border bg-white p-6 shadow-sm">
             <label className="mb-2 block text-sm font-semibold">
               Products CSV
@@ -167,9 +151,6 @@ export default function UploadForm() {
               onChange={(e) => setProductsFile(e.target.files?.[0] ?? null)}
               className="block w-full text-sm"
             />
-            <p className="mt-2 text-xs text-gray-500">
-              Example required fields: product_id, product_name, category, price
-            </p>
             {productsFile && (
               <p className="mt-2 text-sm text-gray-700">
                 Selected: {productsFile.name}
@@ -177,7 +158,6 @@ export default function UploadForm() {
             )}
           </div>
 
-          {/* Branches CSV */}
           <div className="rounded-xl border bg-white p-6 shadow-sm">
             <label className="mb-2 block text-sm font-semibold">
               Branches CSV
@@ -188,9 +168,6 @@ export default function UploadForm() {
               onChange={(e) => setBranchesFile(e.target.files?.[0] ?? null)}
               className="block w-full text-sm"
             />
-            <p className="mt-2 text-xs text-gray-500">
-              Example required fields: branch_id, branch_name, location
-            </p>
             {branchesFile && (
               <p className="mt-2 text-sm text-gray-700">
                 Selected: {branchesFile.name}
@@ -199,29 +176,27 @@ export default function UploadForm() {
           </div>
         </div>
 
-        {/* Submit button */}
         <div className="flex items-center gap-4">
           <button
             type="submit"
             disabled={loading}
             className="rounded-md bg-black px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
           >
-            {loading ? "Validating..." : "Validate CSV Files"}
+            {loading ? "Validating and Saving..." : "Validate and Save CSV Files"}
           </button>
 
           <p className="text-xs text-gray-500">
-            The system will check file structure, columns, and basic row quality.
+            Only clean files will be saved to the database.
           </p>
         </div>
       </form>
 
-      {/* Top-level message */}
       {message && (
         <div
           className={`rounded-lg border p-4 text-sm ${
             isError
               ? "border-red-200 bg-red-50 text-red-700"
-              : allValid
+              : saved
               ? "border-green-200 bg-green-50 text-green-700"
               : "border-yellow-200 bg-yellow-50 text-yellow-700"
           }`}
@@ -230,7 +205,41 @@ export default function UploadForm() {
         </div>
       )}
 
-      {/* Validation results */}
+      {saveSummary && (
+        <div className="rounded-xl border bg-white p-6 shadow-sm">
+          <h2 className="mb-4 text-lg font-semibold">Database Save Summary</h2>
+
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            <div className="rounded-lg border p-4">
+              <p className="text-xs text-gray-500">Branches Saved</p>
+              <p className="mt-1 text-lg font-semibold">{saveSummary.branchesSaved}</p>
+            </div>
+
+            <div className="rounded-lg border p-4">
+              <p className="text-xs text-gray-500">Products Saved</p>
+              <p className="mt-1 text-lg font-semibold">{saveSummary.productsSaved}</p>
+            </div>
+
+            <div className="rounded-lg border p-4">
+              <p className="text-xs text-gray-500">Customers Saved</p>
+              <p className="mt-1 text-lg font-semibold">{saveSummary.customersSaved}</p>
+            </div>
+
+            <div className="rounded-lg border p-4">
+              <p className="text-xs text-gray-500">Transactions Saved</p>
+              <p className="mt-1 text-lg font-semibold">{saveSummary.transactionsSaved}</p>
+            </div>
+
+            <div className="rounded-lg border p-4">
+              <p className="text-xs text-gray-500">Transaction Items Saved</p>
+              <p className="mt-1 text-lg font-semibold">
+                {saveSummary.transactionItemsSaved}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {results.length > 0 && (
         <div className="space-y-6">
           {results.map((result) => (
@@ -274,7 +283,6 @@ export default function UploadForm() {
                 </div>
               </div>
 
-              {/* Missing columns */}
               {result.missingColumns.length > 0 && (
                 <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4">
                   <h3 className="mb-2 text-sm font-semibold text-red-700">
@@ -288,7 +296,6 @@ export default function UploadForm() {
                 </div>
               )}
 
-              {/* Issue list */}
               {result.issues.length > 0 ? (
                 <div>
                   <h3 className="mb-3 text-sm font-semibold">Validation Issues</h3>
