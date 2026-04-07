@@ -1,27 +1,27 @@
 // frontend/app/dashboard/upload-data/page.tsx
 
-// Import redirect so we can protect the page on the server
+// Import redirect so we can protect the page
 import { redirect } from "next/navigation";
 
-// Import the Supabase server client for auth checking
+// Import Supabase server client for auth checking
 import { createClient } from "@/lib/supabase/server";
 
-// Import the reusable private dashboard layout
+// Import dashboard layout
 import DashboardLayout from "@/components/dashboard-layout";
 
-// Import the upload form client component
+// Import the upload form
 import UploadForm from "./upload-form";
 
 export default async function UploadDataPage() {
   // Create the Supabase server client
   const supabase = await createClient();
 
-  // Get the logged-in user
+  // Check the logged-in user
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // If not logged in, redirect to login
+  // Redirect to login if not authenticated
   if (!user) {
     redirect("/login");
   }
@@ -29,20 +29,20 @@ export default async function UploadDataPage() {
   return (
     <DashboardLayout
       title="Upload Data"
-      description="Upload CSV files for transactions, customers, products, and branches."
+      description="Upload and validate CSV files before they are saved into the system."
     >
       {/* Instructions card */}
       <section className="mb-8 rounded-xl border bg-white p-6 shadow-sm">
-        <h2 className="mb-3 text-lg font-semibold">Upload Instructions</h2>
+        <h2 className="mb-3 text-lg font-semibold">Validation Rules</h2>
         <div className="space-y-2 text-sm text-gray-600">
-          <p>• Upload one or more CSV files for your business data.</p>
-          <p>• Supported files: Transactions, Customers, Products, and Branches CSV.</p>
-          <p>• In this step, the system only receives the files successfully.</p>
-          <p>• Validation and database saving will be added in the next steps.</p>
+          <p>• Upload one or more CSV files for transactions, customers, products, and branches.</p>
+          <p>• The system checks required columns, empty values, duplicates, and basic row quality.</p>
+          <p>• Files with issues will show exactly what needs to be fixed.</p>
+          <p>• Clean data will be ready for database insertion in the next step.</p>
         </div>
       </section>
 
-      {/* Upload form */}
+      {/* Upload + validation form */}
       <UploadForm />
     </DashboardLayout>
   );
