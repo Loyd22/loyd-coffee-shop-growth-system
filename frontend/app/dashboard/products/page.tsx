@@ -1,18 +1,10 @@
-// frontend/app/dashboard/products/page.tsx
-
-// Redirect users if they are not logged in
 import { redirect } from "next/navigation";
 
-// Supabase auth check
+import DashboardLayout from "@/components/dashboard-layout";
+import { fetchBackendJson } from "@/lib/backend-api";
+import type { ProductInsightsResponse } from "@/lib/backend-types";
 import { createClient } from "@/lib/supabase/server";
 
-// Prisma database client
-import { prisma } from "@/lib/prisma";
-
-// Reusable dashboard layout
-import DashboardLayout from "@/components/dashboard-layout";
-
-// Helper: format peso currency
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("en-PH", {
     style: "currency",
@@ -21,8 +13,8 @@ function formatCurrency(value: number): string {
   }).format(value);
 }
 
-// Helper: short date
-function formatShortDate(date: Date): string {
+function formatShortDate(value: string): string {
+  const date = new Date(value);
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "2-digit",
@@ -30,7 +22,6 @@ function formatShortDate(date: Date): string {
 }
 
 export default async function ProductInsightsPage() {
-  // Protect page using Supabase auth
   const supabase = await createClient();
 
   const {
@@ -41,127 +32,68 @@ export default async function ProductInsightsPage() {
     redirect("/login");
   }
 
-  // Get products with related transaction items and transactions
-  const products = await prisma.product.findMany({
-    include: {
-      transactionItems: {
-        include: {
-          transaction: true,
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-      },
-    },
-    orderBy: {
-      productName: "asc",
-    },
-  });
+  let productData: ProductInsightsResponse | null = null;
+  let loadError: string | null = null;
 
-  // Build per-product metrics
-  const productInsights = products.map((product) => {
-    const totalRevenue = product.transactionItems.reduce((sum, item) => {
-      return sum + item.lineTotal;
-    }, 0);
+  try {
+    productData = await fetchBackendJson<ProductInsightsResponse>(
+      "/api/v1/insights/products"
+    );
+  } catch (error) {
+    loadError =
+      error instanceof Error
+        ? error.message
+        : "Failed to load product insights from backend.";
+  }
 
-    const totalUnitsSold = product.transactionItems.reduce((sum, item) => {
-      return sum + item.quantity;
-    }, 0);
+  const summary = productData?.summary ?? {
+    total_products: 0,
+    top_product_name: null,
+    weakest_product_name: null,
+    total_product_revenue: 0,
+  };
 
-    const totalOrders = product.transactionItems.length;
-
-    const averageSellingPrice =
-      totalUnitsSold > 0 ? totalRevenue / totalUnitsSold : 0;
-
-    const latestActivityDate =
-      product.transactionItems.length > 0
-        ? product.transactionItems.reduce((latest, item) => {
-            return item.transaction.transactionDate > latest
-              ? item.transaction.transactionDate
-              : latest;
-          }, product.transactionItems[0].transaction.transactionDate)
-        : null;
-
-    return {
-      id: product.id,
-      productName: product.productName,
-      category: product.category ?? "Uncategorized",
-      status: product.status,
-      basePrice: product.price,
-      totalRevenue,
-      totalUnitsSold,
-      totalOrders,
-      averageSellingPrice,
-      latestActivityDate,
-    };
-  });
-
-  // Summary metrics
-  const totalProducts = productInsights.length;
-
-  const topProduct =
-    productInsights.length > 0
-      ? [...productInsights].sort((a, b) => b.totalRevenue - a.totalRevenue)[0]
-      : null;
-
-  const weakestProduct =
-    productInsights.length > 0
-      ? [...productInsights].sort((a, b) => a.totalRevenue - b.totalRevenue)[0]
-      : null;
-
-  const totalProductRevenue = productInsights.reduce((sum, product) => {
-    return sum + product.totalRevenue;
-  }, 0);
-
-  // Top 5 products by revenue
-  const topProducts = [...productInsights]
-    .sort((a, b) => b.totalRevenue - a.totalRevenue)
-    .slice(0, 5);
-
-  // Recent product activity
-  const recentProductActivity = [...productInsights]
-    .filter((product) => product.latestActivityDate !== null)
-    .sort((a, b) => {
-      if (!a.latestActivityDate || !b.latestActivityDate) return 0;
-      return b.latestActivityDate.getTime() - a.latestActivityDate.getTime();
-    })
-    .slice(0, 5);
+  const topProducts = productData?.top_products ?? [];
+  const productInsights = productData?.products ?? [];
+  const recentProductActivity = productData?.recent_activity ?? [];
 
   return (
     <DashboardLayout
       title="Products"
       description="Review real product performance and product-level sales insights."
     >
-      {/* Summary cards */}
+      {loadError && (
+        <section className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          {loadError}
+        </section>
+      )}
+
       <section className="mb-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <p className="mb-2 text-sm text-gray-500">Total Products</p>
-          <h2 className="text-2xl font-bold">{totalProducts}</h2>
+          <h2 className="text-2xl font-bold">{summary.total_products}</h2>
         </div>
 
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <p className="mb-2 text-sm text-gray-500">Top Product</p>
-          <h2 className="text-2xl font-bold">
-            {topProduct ? topProduct.productName : "N/A"}
-          </h2>
+          <h2 className="text-2xl font-bold">{summary.top_product_name ?? "N/A"}</h2>
         </div>
 
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <p className="mb-2 text-sm text-gray-500">Weakest Product</p>
           <h2 className="text-2xl font-bold">
-            {weakestProduct ? weakestProduct.productName : "N/A"}
+            {summary.weakest_product_name ?? "N/A"}
           </h2>
         </div>
 
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <p className="mb-2 text-sm text-gray-500">Total Product Revenue</p>
           <h2 className="text-2xl font-bold">
-            {formatCurrency(totalProductRevenue)}
+            {formatCurrency(summary.total_product_revenue)}
           </h2>
         </div>
       </section>
 
-      {/* Top products by revenue */}
       <section className="mb-8 rounded-xl border bg-white p-6 shadow-sm">
         <h2 className="mb-4 text-lg font-semibold">Top Products by Revenue</h2>
 
@@ -181,17 +113,15 @@ export default async function ProductInsightsPage() {
               {topProducts.length > 0 ? (
                 topProducts.map((product) => (
                   <tr key={product.id} className="border-b last:border-b-0">
-                    <td className="py-3 pr-4 font-medium">
-                      {product.productName}
-                    </td>
+                    <td className="py-3 pr-4 font-medium">{product.product_name}</td>
                     <td className="py-3 pr-4">{product.category}</td>
                     <td className="py-3 pr-4">
-                      {formatCurrency(product.totalRevenue)}
+                      {formatCurrency(product.total_revenue)}
                     </td>
-                    <td className="py-3 pr-4">{product.totalUnitsSold}</td>
-                    <td className="py-3 pr-4">{product.totalOrders}</td>
+                    <td className="py-3 pr-4">{product.total_units_sold}</td>
+                    <td className="py-3 pr-4">{product.total_orders}</td>
                     <td className="py-3">
-                      {formatCurrency(product.averageSellingPrice)}
+                      {formatCurrency(product.average_selling_price)}
                     </td>
                   </tr>
                 ))
@@ -207,7 +137,6 @@ export default async function ProductInsightsPage() {
         </div>
       </section>
 
-      {/* All product insights */}
       <section className="mb-8 rounded-xl border bg-white p-6 shadow-sm">
         <h2 className="mb-4 text-lg font-semibold">All Product Insights</h2>
 
@@ -228,21 +157,19 @@ export default async function ProductInsightsPage() {
               {productInsights.length > 0 ? (
                 productInsights.map((product) => (
                   <tr key={product.id} className="border-b last:border-b-0">
-                    <td className="py-3 pr-4 font-medium">
-                      {product.productName}
-                    </td>
+                    <td className="py-3 pr-4 font-medium">{product.product_name}</td>
                     <td className="py-3 pr-4">{product.category}</td>
                     <td className="py-3 pr-4 capitalize">{product.status}</td>
                     <td className="py-3 pr-4">
-                      {formatCurrency(product.basePrice)}
+                      {formatCurrency(product.base_price)}
                     </td>
                     <td className="py-3 pr-4">
-                      {formatCurrency(product.totalRevenue)}
+                      {formatCurrency(product.total_revenue)}
                     </td>
-                    <td className="py-3 pr-4">{product.totalUnitsSold}</td>
+                    <td className="py-3 pr-4">{product.total_units_sold}</td>
                     <td className="py-3">
-                      {product.latestActivityDate
-                        ? formatShortDate(product.latestActivityDate)
+                      {product.latest_activity_date
+                        ? formatShortDate(product.latest_activity_date)
                         : "No activity"}
                     </td>
                   </tr>
@@ -259,7 +186,6 @@ export default async function ProductInsightsPage() {
         </div>
       </section>
 
-      {/* Recent product activity + notes */}
       <section className="grid gap-6 xl:grid-cols-2">
         <div className="rounded-xl border bg-white p-6 shadow-sm">
           <h2 className="mb-4 text-lg font-semibold">Recent Product Activity</h2>
@@ -268,16 +194,16 @@ export default async function ProductInsightsPage() {
             {recentProductActivity.length > 0 ? (
               recentProductActivity.map((product) => (
                 <div key={product.id} className="rounded-lg border p-4">
-                  <p className="text-sm font-medium">{product.productName}</p>
+                  <p className="text-sm font-medium">{product.product_name}</p>
                   <p className="mt-1 text-sm text-gray-500">
                     Latest sale on{" "}
-                    {product.latestActivityDate
-                      ? formatShortDate(product.latestActivityDate)
+                    {product.latest_activity_date
+                      ? formatShortDate(product.latest_activity_date)
                       : "N/A"}
                   </p>
                   <p className="mt-1 text-sm text-gray-500">
-                    Revenue: {formatCurrency(product.totalRevenue)} | Units:{" "}
-                    {product.totalUnitsSold}
+                    Revenue: {formatCurrency(product.total_revenue)} | Units:{" "}
+                    {product.total_units_sold}
                   </p>
                 </div>
               ))

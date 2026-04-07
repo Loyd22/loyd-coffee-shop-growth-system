@@ -1,18 +1,10 @@
-// frontend/app/dashboard/branches/page.tsx
-
-// Redirect users if they are not logged in
 import { redirect } from "next/navigation";
 
-// Supabase auth check
+import DashboardLayout from "@/components/dashboard-layout";
+import { fetchBackendJson } from "@/lib/backend-api";
+import type { BranchInsightsResponse } from "@/lib/backend-types";
 import { createClient } from "@/lib/supabase/server";
 
-// Prisma database client
-import { prisma } from "@/lib/prisma";
-
-// Reusable dashboard layout
-import DashboardLayout from "@/components/dashboard-layout";
-
-// Helper: format peso currency
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("en-PH", {
     style: "currency",
@@ -21,13 +13,12 @@ function formatCurrency(value: number): string {
   }).format(value);
 }
 
-// Helper: format percent
 function formatPercent(value: number): string {
   return `${value.toFixed(1)}%`;
 }
 
-// Helper: short date
-function formatShortDate(date: Date): string {
+function formatShortDate(value: string): string {
+  const date = new Date(value);
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "2-digit",
@@ -35,7 +26,6 @@ function formatShortDate(date: Date): string {
 }
 
 export default async function BranchInsightsPage() {
-  // Protect page using Supabase auth
   const supabase = await createClient();
 
   const {
@@ -46,147 +36,68 @@ export default async function BranchInsightsPage() {
     redirect("/login");
   }
 
-  // Get all branches with transactions and customers
-  const branches = await prisma.branch.findMany({
-    include: {
-      transactions: {
-        include: {
-          customer: true,
-        },
-        orderBy: {
-          transactionDate: "desc",
-        },
-      },
-    },
-    orderBy: {
-      branchName: "asc",
-    },
-  });
+  let branchData: BranchInsightsResponse | null = null;
+  let loadError: string | null = null;
 
-  // Build per-branch metrics
-  const branchInsights = branches.map((branch) => {
-    const totalRevenue = branch.transactions.reduce((sum, transaction) => {
-      return sum + transaction.totalAmount;
-    }, 0);
-
-    const totalOrders = branch.transactions.length;
-
-    const averageOrderValue =
-      totalOrders > 0 ? totalRevenue / totalOrders : 0;
-
-    // Unique active customers in this branch
-    const uniqueCustomers = new Set(
-      branch.transactions
-        .filter((transaction) => transaction.customerId)
-        .map((transaction) => transaction.customerId)
+  try {
+    branchData = await fetchBackendJson<BranchInsightsResponse>(
+      "/api/v1/insights/branches"
     );
+  } catch (error) {
+    loadError =
+      error instanceof Error
+        ? error.message
+        : "Failed to load branch insights from backend.";
+  }
 
-    // Repeat customers in this branch
-    const customerOrderCount = new Map<string, number>();
+  const summary = branchData?.summary ?? {
+    total_branches: 0,
+    top_branch_name: null,
+    weakest_branch_name: null,
+    total_branch_revenue: 0,
+  };
 
-    branch.transactions.forEach((transaction) => {
-      if (!transaction.customerId) return;
-
-      const currentCount = customerOrderCount.get(transaction.customerId) ?? 0;
-      customerOrderCount.set(transaction.customerId, currentCount + 1);
-    });
-
-    const repeatCustomerCount = Array.from(customerOrderCount.values()).filter(
-      (count) => count > 1
-    ).length;
-
-    const repeatCustomerRate =
-      uniqueCustomers.size > 0
-        ? (repeatCustomerCount / uniqueCustomers.size) * 100
-        : 0;
-
-    const latestTransactionDate =
-      branch.transactions.length > 0
-        ? branch.transactions[0].transactionDate
-        : null;
-
-    return {
-      id: branch.id,
-      branchName: branch.branchName,
-      branchCode: branch.branchCode,
-      city: branch.city ?? "N/A",
-      address: branch.address ?? "N/A",
-      status: branch.status,
-      totalRevenue,
-      totalOrders,
-      averageOrderValue,
-      uniqueCustomerCount: uniqueCustomers.size,
-      repeatCustomerRate,
-      latestTransactionDate,
-    };
-  });
-
-  // Summary cards
-  const totalBranches = branchInsights.length;
-
-  const topBranch =
-    branchInsights.length > 0
-      ? [...branchInsights].sort((a, b) => b.totalRevenue - a.totalRevenue)[0]
-      : null;
-
-  const weakestBranch =
-    branchInsights.length > 0
-      ? [...branchInsights].sort((a, b) => a.totalRevenue - b.totalRevenue)[0]
-      : null;
-
-  const totalBranchRevenue = branchInsights.reduce((sum, branch) => {
-    return sum + branch.totalRevenue;
-  }, 0);
-
-  // Top 5 branches by revenue
-  const topBranches = [...branchInsights]
-    .sort((a, b) => b.totalRevenue - a.totalRevenue)
-    .slice(0, 5);
-
-  // Recent branch activity
-  const recentBranchActivity = [...branchInsights]
-    .filter((branch) => branch.latestTransactionDate !== null)
-    .sort((a, b) => {
-      if (!a.latestTransactionDate || !b.latestTransactionDate) return 0;
-      return b.latestTransactionDate.getTime() - a.latestTransactionDate.getTime();
-    })
-    .slice(0, 5);
+  const topBranches = branchData?.top_branches ?? [];
+  const branchInsights = branchData?.branches ?? [];
+  const recentBranchActivity = branchData?.recent_activity ?? [];
 
   return (
     <DashboardLayout
       title="Branches"
       description="Compare branch performance and review real branch-level insights."
     >
-      {/* Summary cards */}
+      {loadError && (
+        <section className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          {loadError}
+        </section>
+      )}
+
       <section className="mb-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <p className="mb-2 text-sm text-gray-500">Total Branches</p>
-          <h2 className="text-2xl font-bold">{totalBranches}</h2>
+          <h2 className="text-2xl font-bold">{summary.total_branches}</h2>
         </div>
 
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <p className="mb-2 text-sm text-gray-500">Top Branch</p>
-          <h2 className="text-2xl font-bold">
-            {topBranch ? topBranch.branchName : "N/A"}
-          </h2>
+          <h2 className="text-2xl font-bold">{summary.top_branch_name ?? "N/A"}</h2>
         </div>
 
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <p className="mb-2 text-sm text-gray-500">Weakest Branch</p>
           <h2 className="text-2xl font-bold">
-            {weakestBranch ? weakestBranch.branchName : "N/A"}
+            {summary.weakest_branch_name ?? "N/A"}
           </h2>
         </div>
 
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <p className="mb-2 text-sm text-gray-500">Total Branch Revenue</p>
           <h2 className="text-2xl font-bold">
-            {formatCurrency(totalBranchRevenue)}
+            {formatCurrency(summary.total_branch_revenue)}
           </h2>
         </div>
       </section>
 
-      {/* Top branches by revenue */}
       <section className="mb-8 rounded-xl border bg-white p-6 shadow-sm">
         <h2 className="mb-4 text-lg font-semibold">Top Branches by Revenue</h2>
 
@@ -206,17 +117,17 @@ export default async function BranchInsightsPage() {
               {topBranches.length > 0 ? (
                 topBranches.map((branch) => (
                   <tr key={branch.id} className="border-b last:border-b-0">
-                    <td className="py-3 pr-4 font-medium">{branch.branchName}</td>
-                    <td className="py-3 pr-4">{branch.branchCode}</td>
+                    <td className="py-3 pr-4 font-medium">{branch.branch_name}</td>
+                    <td className="py-3 pr-4">{branch.branch_code}</td>
                     <td className="py-3 pr-4">
-                      {formatCurrency(branch.totalRevenue)}
+                      {formatCurrency(branch.total_revenue)}
                     </td>
-                    <td className="py-3 pr-4">{branch.totalOrders}</td>
+                    <td className="py-3 pr-4">{branch.total_orders}</td>
                     <td className="py-3 pr-4">
-                      {formatCurrency(branch.averageOrderValue)}
+                      {formatCurrency(branch.average_order_value)}
                     </td>
                     <td className="py-3">
-                      {formatPercent(branch.repeatCustomerRate)}
+                      {formatPercent(branch.repeat_customer_rate)}
                     </td>
                   </tr>
                 ))
@@ -232,7 +143,6 @@ export default async function BranchInsightsPage() {
         </div>
       </section>
 
-      {/* All branch insights */}
       <section className="mb-8 rounded-xl border bg-white p-6 shadow-sm">
         <h2 className="mb-4 text-lg font-semibold">All Branch Insights</h2>
 
@@ -253,17 +163,17 @@ export default async function BranchInsightsPage() {
               {branchInsights.length > 0 ? (
                 branchInsights.map((branch) => (
                   <tr key={branch.id} className="border-b last:border-b-0">
-                    <td className="py-3 pr-4 font-medium">{branch.branchName}</td>
+                    <td className="py-3 pr-4 font-medium">{branch.branch_name}</td>
                     <td className="py-3 pr-4">{branch.city}</td>
                     <td className="py-3 pr-4 capitalize">{branch.status}</td>
                     <td className="py-3 pr-4">
-                      {formatCurrency(branch.totalRevenue)}
+                      {formatCurrency(branch.total_revenue)}
                     </td>
-                    <td className="py-3 pr-4">{branch.totalOrders}</td>
-                    <td className="py-3 pr-4">{branch.uniqueCustomerCount}</td>
+                    <td className="py-3 pr-4">{branch.total_orders}</td>
+                    <td className="py-3 pr-4">{branch.unique_customer_count}</td>
                     <td className="py-3">
-                      {branch.latestTransactionDate
-                        ? formatShortDate(branch.latestTransactionDate)
+                      {branch.latest_transaction_date
+                        ? formatShortDate(branch.latest_transaction_date)
                         : "No activity"}
                     </td>
                   </tr>
@@ -280,7 +190,6 @@ export default async function BranchInsightsPage() {
         </div>
       </section>
 
-      {/* Recent branch activity */}
       <section className="grid gap-6 xl:grid-cols-2">
         <div className="rounded-xl border bg-white p-6 shadow-sm">
           <h2 className="mb-4 text-lg font-semibold">Recent Branch Activity</h2>
@@ -289,16 +198,16 @@ export default async function BranchInsightsPage() {
             {recentBranchActivity.length > 0 ? (
               recentBranchActivity.map((branch) => (
                 <div key={branch.id} className="rounded-lg border p-4">
-                  <p className="text-sm font-medium">{branch.branchName}</p>
+                  <p className="text-sm font-medium">{branch.branch_name}</p>
                   <p className="mt-1 text-sm text-gray-500">
                     Latest transaction on{" "}
-                    {branch.latestTransactionDate
-                      ? formatShortDate(branch.latestTransactionDate)
+                    {branch.latest_transaction_date
+                      ? formatShortDate(branch.latest_transaction_date)
                       : "N/A"}
                   </p>
                   <p className="mt-1 text-sm text-gray-500">
-                    Revenue: {formatCurrency(branch.totalRevenue)} | Orders:{" "}
-                    {branch.totalOrders}
+                    Revenue: {formatCurrency(branch.total_revenue)} | Orders:{" "}
+                    {branch.total_orders}
                   </p>
                 </div>
               ))

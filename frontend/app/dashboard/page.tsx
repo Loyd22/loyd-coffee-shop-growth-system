@@ -1,18 +1,10 @@
-// frontend/app/dashboard/page.tsx
-
-// This lets us redirect unauthenticated users before rendering
 import { redirect } from "next/navigation";
 
-// Supabase server client for auth protection
+import DashboardLayout from "@/components/dashboard-layout";
+import { fetchBackendJson } from "@/lib/backend-api";
+import type { DashboardSummaryResponse } from "@/lib/backend-types";
 import { createClient } from "@/lib/supabase/server";
 
-// Prisma client for database reads
-import { prisma } from "@/lib/prisma";
-
-// Reusable dashboard layout from Step 18
-import DashboardLayout from "@/components/dashboard-layout";
-
-// Helper function to format money nicely
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("en-PH", {
     style: "currency",
@@ -21,13 +13,12 @@ function formatCurrency(value: number): string {
   }).format(value);
 }
 
-// Helper function to format percent nicely
 function formatPercent(value: number): string {
   return `${value.toFixed(1)}%`;
 }
 
-// Helper function to format dates like Apr 06
-function formatShortDate(date: Date): string {
+function formatShortDate(value: string): string {
+  const date = new Date(value);
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "2-digit",
@@ -35,7 +26,6 @@ function formatShortDate(date: Date): string {
 }
 
 export default async function DashboardPage() {
-  // Protect the page with Supabase auth
   const supabase = await createClient();
 
   const {
@@ -46,200 +36,58 @@ export default async function DashboardPage() {
     redirect("/login");
   }
 
-  // Fetch transactions with related branch, customer, and items/product
-  const transactions = await prisma.transaction.findMany({
-    include: {
-      branch: true,
-      customer: true,
-      items: {
-        include: {
-          product: true,
-        },
-      },
-    },
-    orderBy: {
-      transactionDate: "desc",
-    },
-  });
+  let dashboardData: DashboardSummaryResponse | null = null;
+  let loadError: string | null = null;
 
-  // Fetch all customers so we can compute inactivity properly
-  const customers = await prisma.customer.findMany({
-    include: {
-      transactions: true,
-    },
-  });
+  try {
+    dashboardData = await fetchBackendJson<DashboardSummaryResponse>(
+      "/api/v1/dashboard/summary"
+    );
+  } catch (error) {
+    loadError =
+      error instanceof Error
+        ? error.message
+        : "Failed to load dashboard data from backend.";
+  }
 
-  // -----------------------------
-  // KPI CALCULATIONS
-  // -----------------------------
+  const summary = dashboardData?.summary ?? {
+    total_orders: 0,
+    total_revenue: 0,
+    average_order_value: 0,
+    repeat_customer_rate: 0,
+    inactive_customer_count: 0,
+  };
 
-  const totalOrders = transactions.length;
-
-  const totalRevenue = transactions.reduce((sum, transaction) => {
-    return sum + transaction.totalAmount;
-  }, 0);
-
-  const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
-
-  // Repeat customer rate:
-  // Customers who have more than 1 transaction divided by customers who have at least 1 transaction
-  const customersWithOrders = customers.filter(
-    (customer) => customer.transactions.length > 0
-  );
-
-  const repeatCustomers = customersWithOrders.filter(
-    (customer) => customer.transactions.length > 1
-  );
-
-  const repeatCustomerRate =
-    customersWithOrders.length > 0
-      ? (repeatCustomers.length / customersWithOrders.length) * 100
-      : 0;
-
-  // Inactive customer count:
-  // Customers with at least one transaction but no transaction in the last 30 days
-  const today = new Date();
-  const thirtyDaysAgo = new Date(today);
-  thirtyDaysAgo.setDate(today.getDate() - 30);
-
-  const inactiveCustomers = customers.filter((customer) => {
-    if (customer.transactions.length === 0) return false;
-
-    const latestTransactionDate = customer.transactions.reduce((latest, txn) => {
-      return txn.transactionDate > latest ? txn.transactionDate : latest;
-    }, customer.transactions[0].transactionDate);
-
-    return latestTransactionDate < thirtyDaysAgo;
-  });
-
-  const inactiveCustomerCount = inactiveCustomers.length;
-
-  // -----------------------------
-  // TOP PRODUCTS
-  // -----------------------------
-
-  const productMap = new Map<
-    string,
-    {
-      productName: string;
-      totalSales: number;
-      totalUnits: number;
-    }
-  >();
-
-  transactions.forEach((transaction) => {
-    transaction.items.forEach((item) => {
-      const existing = productMap.get(item.productId);
-
-      if (existing) {
-        existing.totalSales += item.lineTotal;
-        existing.totalUnits += item.quantity;
-      } else {
-        productMap.set(item.productId, {
-          productName: item.product.productName,
-          totalSales: item.lineTotal,
-          totalUnits: item.quantity,
-        });
-      }
-    });
-  });
-
-  const topProducts = Array.from(productMap.values())
-    .sort((a, b) => b.totalSales - a.totalSales)
-    .slice(0, 5);
-
-  // -----------------------------
-  // TOP BRANCHES
-  // -----------------------------
-
-  const branchMap = new Map<
-    string,
-    {
-      branchName: string;
-      totalRevenue: number;
-      totalOrders: number;
-    }
-  >();
-
-  transactions.forEach((transaction) => {
-    const existing = branchMap.get(transaction.branchId);
-
-    if (existing) {
-      existing.totalRevenue += transaction.totalAmount;
-      existing.totalOrders += 1;
-    } else {
-      branchMap.set(transaction.branchId, {
-        branchName: transaction.branch.branchName,
-        totalRevenue: transaction.totalAmount,
-        totalOrders: 1,
-      });
-    }
-  });
-
-  const topBranches = Array.from(branchMap.values())
-    .sort((a, b) => b.totalRevenue - a.totalRevenue)
-    .slice(0, 5);
-
-  // -----------------------------
-  // REVENUE TREND (LAST 7 DAYS)
-  // -----------------------------
-
-  const revenueTrend = Array.from({ length: 7 }).map((_, index) => {
-    const date = new Date();
-    date.setDate(today.getDate() - (6 - index));
-
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
-
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    const revenueForDay = transactions
-      .filter(
-        (transaction) =>
-          transaction.transactionDate >= startOfDay &&
-          transaction.transactionDate <= endOfDay
-      )
-      .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
-
-    return {
-      label: formatShortDate(date),
-      revenue: revenueForDay,
-    };
-  });
+  const topProducts = dashboardData?.top_products ?? [];
+  const topBranches = dashboardData?.top_branches ?? [];
+  const revenueTrend = dashboardData?.revenue_trend ?? [];
+  const recentTransactions = dashboardData?.recent_transactions ?? [];
 
   const maxRevenueInTrend = Math.max(
     ...revenueTrend.map((item) => item.revenue),
     1
   );
 
-  // -----------------------------
-  // RECENT TRANSACTIONS
-  // -----------------------------
-
-  const recentTransactions = transactions.slice(0, 5);
-
-  // KPI cards
   const kpiCards = [
     {
       label: "Total Revenue",
-      value: formatCurrency(totalRevenue),
+      value: formatCurrency(summary.total_revenue),
     },
     {
       label: "Total Orders",
-      value: totalOrders.toLocaleString(),
+      value: summary.total_orders.toLocaleString(),
     },
     {
       label: "Average Order Value",
-      value: formatCurrency(averageOrderValue),
+      value: formatCurrency(summary.average_order_value),
     },
     {
       label: "Repeat Customer Rate",
-      value: formatPercent(repeatCustomerRate),
+      value: formatPercent(summary.repeat_customer_rate),
     },
     {
       label: "Inactive Customers",
-      value: inactiveCustomerCount.toLocaleString(),
+      value: summary.inactive_customer_count.toLocaleString(),
     },
   ];
 
@@ -248,7 +96,12 @@ export default async function DashboardPage() {
       title="Dashboard"
       description={`Welcome back, ${user.email}. Here is your real business overview.`}
     >
-      {/* KPI cards */}
+      {loadError && (
+        <section className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          {loadError}
+        </section>
+      )}
+
       <section className="mb-8 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         {kpiCards.map((card) => (
           <div
@@ -261,9 +114,7 @@ export default async function DashboardPage() {
         ))}
       </section>
 
-      {/* Revenue trend + top branches */}
       <section className="mb-8 grid gap-6 xl:grid-cols-2">
-        {/* Revenue trend */}
         <div className="rounded-xl border bg-white p-6 shadow-sm">
           <h2 className="mb-2 text-lg font-semibold">Revenue Trend</h2>
           <p className="mb-6 text-sm text-gray-500">
@@ -272,12 +123,10 @@ export default async function DashboardPage() {
 
           <div className="space-y-4">
             {revenueTrend.map((item) => (
-              <div key={item.label}>
+              <div key={item.date}>
                 <div className="mb-1 flex items-center justify-between text-sm">
                   <span>{item.label}</span>
-                  <span className="font-medium">
-                    {formatCurrency(item.revenue)}
-                  </span>
+                  <span className="font-medium">{formatCurrency(item.revenue)}</span>
                 </div>
 
                 <div className="h-3 rounded-full bg-gray-100">
@@ -293,7 +142,6 @@ export default async function DashboardPage() {
           </div>
         </div>
 
-        {/* Top branches */}
         <div className="rounded-xl border bg-white p-6 shadow-sm">
           <h2 className="mb-4 text-lg font-semibold">Top Branches</h2>
 
@@ -309,17 +157,12 @@ export default async function DashboardPage() {
               <tbody>
                 {topBranches.length > 0 ? (
                   topBranches.map((branch) => (
-                    <tr
-                      key={branch.branchName}
-                      className="border-b last:border-b-0"
-                    >
-                      <td className="py-3 pr-4 font-medium">
-                        {branch.branchName}
-                      </td>
+                    <tr key={branch.branch_id} className="border-b last:border-b-0">
+                      <td className="py-3 pr-4 font-medium">{branch.branch_name}</td>
                       <td className="py-3 pr-4">
-                        {formatCurrency(branch.totalRevenue)}
+                        {formatCurrency(branch.total_revenue)}
                       </td>
-                      <td className="py-3">{branch.totalOrders}</td>
+                      <td className="py-3">{branch.total_orders}</td>
                     </tr>
                   ))
                 ) : (
@@ -335,9 +178,7 @@ export default async function DashboardPage() {
         </div>
       </section>
 
-      {/* Top products + recent transactions */}
       <section className="grid gap-6 xl:grid-cols-2">
-        {/* Top products */}
         <div className="rounded-xl border bg-white p-6 shadow-sm">
           <h2 className="mb-4 text-lg font-semibold">Top Products</h2>
 
@@ -354,16 +195,16 @@ export default async function DashboardPage() {
                 {topProducts.length > 0 ? (
                   topProducts.map((product) => (
                     <tr
-                      key={product.productName}
+                      key={product.product_id}
                       className="border-b last:border-b-0"
                     >
                       <td className="py-3 pr-4 font-medium">
-                        {product.productName}
+                        {product.product_name}
                       </td>
                       <td className="py-3 pr-4">
-                        {formatCurrency(product.totalSales)}
+                        {formatCurrency(product.total_sales)}
                       </td>
-                      <td className="py-3">{product.totalUnits}</td>
+                      <td className="py-3">{product.total_units}</td>
                     </tr>
                   ))
                 ) : (
@@ -378,7 +219,6 @@ export default async function DashboardPage() {
           </div>
         </div>
 
-        {/* Recent transactions */}
         <div className="rounded-xl border bg-white p-6 shadow-sm">
           <h2 className="mb-4 text-lg font-semibold">Recent Transactions</h2>
 
@@ -396,20 +236,18 @@ export default async function DashboardPage() {
                 {recentTransactions.length > 0 ? (
                   recentTransactions.map((transaction) => (
                     <tr
-                      key={transaction.id}
+                      key={transaction.transaction_id}
                       className="border-b last:border-b-0"
                     >
                       <td className="py-3 pr-4 font-medium">
-                        {transaction.transactionCode}
+                        {transaction.transaction_code}
                       </td>
+                      <td className="py-3 pr-4">{transaction.branch_name}</td>
                       <td className="py-3 pr-4">
-                        {transaction.branch.branchName}
-                      </td>
-                      <td className="py-3 pr-4">
-                        {formatShortDate(transaction.transactionDate)}
+                        {formatShortDate(transaction.transaction_date)}
                       </td>
                       <td className="py-3">
-                        {formatCurrency(transaction.totalAmount)}
+                        {formatCurrency(transaction.total_amount)}
                       </td>
                     </tr>
                   ))

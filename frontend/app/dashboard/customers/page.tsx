@@ -1,18 +1,10 @@
-// frontend/app/dashboard/customers/page.tsx
-
-// Redirect users if they are not logged in
 import { redirect } from "next/navigation";
 
-// Supabase auth check
+import DashboardLayout from "@/components/dashboard-layout";
+import { fetchBackendJson } from "@/lib/backend-api";
+import type { CustomerInsightsResponse } from "@/lib/backend-types";
 import { createClient } from "@/lib/supabase/server";
 
-// Prisma database client
-import { prisma } from "@/lib/prisma";
-
-// Reusable dashboard layout
-import DashboardLayout from "@/components/dashboard-layout";
-
-// Helper: format peso currency
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("en-PH", {
     style: "currency",
@@ -21,21 +13,55 @@ function formatCurrency(value: number): string {
   }).format(value);
 }
 
-// Helper: format percent
 function formatPercent(value: number): string {
   return `${value.toFixed(1)}%`;
 }
 
-// Helper: short date
-function formatShortDate(date: Date): string {
+function formatShortDate(value: string): string {
+  const date = new Date(value);
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "2-digit",
   }).format(date);
 }
 
+function getSegmentBadgeClass(segment: string): string {
+  switch (segment) {
+    case "Loyal Customer":
+      return "bg-green-100 text-green-700";
+    case "High-Value Customer":
+      return "bg-purple-100 text-purple-700";
+    case "Frequent Buyer":
+      return "bg-blue-100 text-blue-700";
+    case "Occasional Buyer":
+      return "bg-yellow-100 text-yellow-700";
+    case "Inactive Customer":
+      return "bg-red-100 text-red-700";
+    case "New / One-Time Customer":
+      return "bg-gray-100 text-gray-700";
+    case "No Orders Yet":
+      return "bg-slate-100 text-slate-700";
+    default:
+      return "bg-gray-100 text-gray-700";
+  }
+}
+
+function getChurnBadgeClass(status: string): string {
+  switch (status) {
+    case "Active":
+      return "bg-green-100 text-green-700";
+    case "At Risk":
+      return "bg-yellow-100 text-yellow-700";
+    case "Churned":
+      return "bg-red-100 text-red-700";
+    case "No Orders Yet":
+      return "bg-slate-100 text-slate-700";
+    default:
+      return "bg-gray-100 text-gray-700";
+  }
+}
+
 export default async function CustomerInsightsPage() {
-  // Protect page using Supabase auth
   const supabase = await createClient();
 
   const {
@@ -46,177 +72,137 @@ export default async function CustomerInsightsPage() {
     redirect("/login");
   }
 
-  // Get all customers with their transactions
-  const customers = await prisma.customer.findMany({
-    include: {
-      transactions: {
-        include: {
-          branch: true,
-        },
-        orderBy: {
-          transactionDate: "desc",
-        },
-      },
-    },
-    orderBy: {
-      createdAt: "desc",
-    },
-  });
+  let customerData: CustomerInsightsResponse | null = null;
+  let loadError: string | null = null;
 
-  // Current date and inactive threshold
-  const today = new Date();
-  const thirtyDaysAgo = new Date(today);
-  thirtyDaysAgo.setDate(today.getDate() - 30);
+  try {
+    customerData = await fetchBackendJson<CustomerInsightsResponse>(
+      "/api/v1/insights/customers"
+    );
+  } catch (error) {
+    loadError =
+      error instanceof Error
+        ? error.message
+        : "Failed to load customer insights from backend.";
+  }
 
-  // Build per-customer metrics
-  const customerInsights = customers.map((customer) => {
-    const totalVisits = customer.transactions.length;
+  const summary = customerData?.summary ?? {
+    total_customers: 0,
+    active_customers: 0,
+    repeat_customers: 0,
+    inactive_customers: 0,
+    loyalty_members: 0,
+    total_customer_spending: 0,
+    average_customer_spending: 0,
+    repeat_customer_rate: 0,
+  };
 
-    const totalSpending = customer.transactions.reduce((sum, transaction) => {
-      return sum + transaction.totalAmount;
-    }, 0);
-
-    const averageOrderValue =
-      totalVisits > 0 ? totalSpending / totalVisits : 0;
-
-    const latestTransactionDate =
-      customer.transactions.length > 0
-        ? customer.transactions[0].transactionDate
-        : null;
-
-    const latestBranchName =
-      customer.transactions.length > 0
-        ? customer.transactions[0].branch.branchName
-        : null;
-
-    const isRepeatCustomer = totalVisits > 1;
-    const isActiveCustomer =
-      latestTransactionDate !== null && latestTransactionDate >= thirtyDaysAgo;
-    const isInactiveCustomer =
-      totalVisits > 0 &&
-      latestTransactionDate !== null &&
-      latestTransactionDate < thirtyDaysAgo;
-
-    return {
-      id: customer.id,
-      customerCode: customer.customerCode ?? "N/A",
-      fullName: customer.fullName ?? "Unnamed Customer",
-      email: customer.email ?? "No email",
-      phoneNumber: customer.phoneNumber ?? "No phone",
-      gender: customer.gender ?? "N/A",
-      loyaltyMember: customer.loyaltyMember,
-      totalVisits,
-      totalSpending,
-      averageOrderValue,
-      latestTransactionDate,
-      latestBranchName,
-      isRepeatCustomer,
-      isActiveCustomer,
-      isInactiveCustomer,
-    };
-  });
-
-  // Summary metrics
-  const totalCustomers = customerInsights.length;
-
-  const activeCustomers = customerInsights.filter(
-    (customer) => customer.isActiveCustomer
-  );
-
-  const repeatCustomers = customerInsights.filter(
-    (customer) => customer.isRepeatCustomer
-  );
-
-  const inactiveCustomers = customerInsights.filter(
-    (customer) => customer.isInactiveCustomer
-  );
-
-  const loyaltyMembers = customerInsights.filter(
-    (customer) => customer.loyaltyMember
-  );
-
-  const totalCustomerSpending = customerInsights.reduce((sum, customer) => {
-    return sum + customer.totalSpending;
-  }, 0);
-
-  const averageCustomerSpending =
-    totalCustomers > 0 ? totalCustomerSpending / totalCustomers : 0;
-
-  const repeatCustomerRate =
-    totalCustomers > 0 ? (repeatCustomers.length / totalCustomers) * 100 : 0;
-
-  // Top 5 customers by spending
-  const topCustomers = [...customerInsights]
-    .sort((a, b) => b.totalSpending - a.totalSpending)
-    .slice(0, 5);
-
-  // Recent customer activity
-  const recentCustomerActivity = [...customerInsights]
-    .filter((customer) => customer.latestTransactionDate !== null)
-    .sort((a, b) => {
-      if (!a.latestTransactionDate || !b.latestTransactionDate) return 0;
-      return b.latestTransactionDate.getTime() - a.latestTransactionDate.getTime();
-    })
-    .slice(0, 5);
+  const segmentSummary = customerData?.segment_summary ?? [];
+  const churnSummary = customerData?.churn_summary ?? [];
+  const topCustomers = customerData?.top_customers ?? [];
+  const churnPriorityCustomers = customerData?.churn_priority_customers ?? [];
+  const customerInsights = customerData?.customers ?? [];
+  const recentCustomerActivity = customerData?.recent_activity ?? [];
 
   return (
     <DashboardLayout
       title="Customers"
-      description="Review real customer behavior, spending, and activity insights."
+      description="Review real customer behavior, segmentation, and churn / inactivity insights."
     >
-      {/* Summary cards */}
+      {loadError && (
+        <section className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          {loadError}
+        </section>
+      )}
+
       <section className="mb-8 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <p className="mb-2 text-sm text-gray-500">Total Customers</p>
-          <h2 className="text-2xl font-bold">{totalCustomers}</h2>
+          <h2 className="text-2xl font-bold">{summary.total_customers}</h2>
         </div>
 
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <p className="mb-2 text-sm text-gray-500">Active Customers</p>
-          <h2 className="text-2xl font-bold">{activeCustomers.length}</h2>
+          <h2 className="text-2xl font-bold">{summary.active_customers}</h2>
         </div>
 
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <p className="mb-2 text-sm text-gray-500">Repeat Customers</p>
-          <h2 className="text-2xl font-bold">{repeatCustomers.length}</h2>
+          <h2 className="text-2xl font-bold">{summary.repeat_customers}</h2>
         </div>
 
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <p className="mb-2 text-sm text-gray-500">Inactive Customers</p>
-          <h2 className="text-2xl font-bold">{inactiveCustomers.length}</h2>
+          <h2 className="text-2xl font-bold">{summary.inactive_customers}</h2>
         </div>
 
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <p className="mb-2 text-sm text-gray-500">Loyalty Members</p>
-          <h2 className="text-2xl font-bold">{loyaltyMembers.length}</h2>
+          <h2 className="text-2xl font-bold">{summary.loyalty_members}</h2>
         </div>
       </section>
 
-      {/* Customer KPI strip */}
       <section className="mb-8 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <p className="mb-2 text-sm text-gray-500">Average Customer Spending</p>
           <h2 className="text-2xl font-bold">
-            {formatCurrency(averageCustomerSpending)}
+            {formatCurrency(summary.average_customer_spending)}
           </h2>
         </div>
 
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <p className="mb-2 text-sm text-gray-500">Repeat Customer Rate</p>
           <h2 className="text-2xl font-bold">
-            {formatPercent(repeatCustomerRate)}
+            {formatPercent(summary.repeat_customer_rate)}
           </h2>
         </div>
 
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <p className="mb-2 text-sm text-gray-500">Total Customer Spending</p>
           <h2 className="text-2xl font-bold">
-            {formatCurrency(totalCustomerSpending)}
+            {formatCurrency(summary.total_customer_spending)}
           </h2>
         </div>
       </section>
 
-      {/* Top customers by spending */}
+      <section className="mb-8 rounded-xl border bg-white p-6 shadow-sm">
+        <h2 className="mb-4 text-lg font-semibold">Customer Segmentation Summary</h2>
+
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {segmentSummary.map((item) => (
+            <div key={item.segment} className="rounded-lg border p-4">
+              <div
+                className={`mb-3 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${getSegmentBadgeClass(
+                  item.segment
+                )}`}
+              >
+                {item.segment}
+              </div>
+              <p className="text-2xl font-bold">{item.count}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="mb-8 rounded-xl border bg-white p-6 shadow-sm">
+        <h2 className="mb-4 text-lg font-semibold">Churn / Inactivity Summary</h2>
+
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {churnSummary.map((item) => (
+            <div key={item.status} className="rounded-lg border p-4">
+              <div
+                className={`mb-3 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${getChurnBadgeClass(
+                  item.status
+                )}`}
+              >
+                {item.status}
+              </div>
+              <p className="text-2xl font-bold">{item.count}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
       <section className="mb-8 rounded-xl border bg-white p-6 shadow-sm">
         <h2 className="mb-4 text-lg font-semibold">Top Customers by Spending</h2>
 
@@ -225,28 +211,42 @@ export default async function CustomerInsightsPage() {
             <thead>
               <tr className="border-b text-left text-gray-500">
                 <th className="py-3 pr-4">Customer</th>
-                <th className="py-3 pr-4">Customer Code</th>
+                <th className="py-3 pr-4">Segment</th>
+                <th className="py-3 pr-4">Churn Status</th>
                 <th className="py-3 pr-4">Spending</th>
                 <th className="py-3 pr-4">Visits</th>
-                <th className="py-3 pr-4">Avg Order</th>
-                <th className="py-3">Loyalty</th>
+                <th className="py-3">Avg Order</th>
               </tr>
             </thead>
             <tbody>
               {topCustomers.length > 0 ? (
                 topCustomers.map((customer) => (
                   <tr key={customer.id} className="border-b last:border-b-0">
-                    <td className="py-3 pr-4 font-medium">{customer.fullName}</td>
-                    <td className="py-3 pr-4">{customer.customerCode}</td>
+                    <td className="py-3 pr-4 font-medium">{customer.full_name}</td>
                     <td className="py-3 pr-4">
-                      {formatCurrency(customer.totalSpending)}
+                      <span
+                        className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${getSegmentBadgeClass(
+                          customer.segment
+                        )}`}
+                      >
+                        {customer.segment}
+                      </span>
                     </td>
-                    <td className="py-3 pr-4">{customer.totalVisits}</td>
                     <td className="py-3 pr-4">
-                      {formatCurrency(customer.averageOrderValue)}
+                      <span
+                        className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${getChurnBadgeClass(
+                          customer.churn_status
+                        )}`}
+                      >
+                        {customer.churn_status}
+                      </span>
                     </td>
+                    <td className="py-3 pr-4">
+                      {formatCurrency(customer.total_spending)}
+                    </td>
+                    <td className="py-3 pr-4">{customer.total_visits}</td>
                     <td className="py-3">
-                      {customer.loyaltyMember ? "Member" : "Non-member"}
+                      {formatCurrency(customer.average_order_value)}
                     </td>
                   </tr>
                 ))
@@ -262,7 +262,57 @@ export default async function CustomerInsightsPage() {
         </div>
       </section>
 
-      {/* All customer insights */}
+      <section className="mb-8 rounded-xl border bg-white p-6 shadow-sm">
+        <h2 className="mb-4 text-lg font-semibold">Customers Needing Attention</h2>
+
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-sm">
+            <thead>
+              <tr className="border-b text-left text-gray-500">
+                <th className="py-3 pr-4">Customer</th>
+                <th className="py-3 pr-4">Churn Status</th>
+                <th className="py-3 pr-4">Days Since Last Purchase</th>
+                <th className="py-3 pr-4">Last Branch</th>
+                <th className="py-3">Total Spending</th>
+              </tr>
+            </thead>
+            <tbody>
+              {churnPriorityCustomers.length > 0 ? (
+                churnPriorityCustomers.map((customer) => (
+                  <tr key={customer.id} className="border-b last:border-b-0">
+                    <td className="py-3 pr-4 font-medium">{customer.full_name}</td>
+                    <td className="py-3 pr-4">
+                      <span
+                        className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${getChurnBadgeClass(
+                          customer.churn_status
+                        )}`}
+                      >
+                        {customer.churn_status}
+                      </span>
+                    </td>
+                    <td className="py-3 pr-4">
+                      {customer.days_since_last_purchase ?? "N/A"}
+                    </td>
+                    <td className="py-3 pr-4">
+                      {customer.latest_branch_name ?? "N/A"}
+                    </td>
+                    <td className="py-3">
+                      {formatCurrency(customer.total_spending)}
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td className="py-4 text-gray-500" colSpan={5}>
+                    No at-risk or churned customers right now.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <section className="mb-8 rounded-xl border bg-white p-6 shadow-sm">
         <h2 className="mb-4 text-lg font-semibold">All Customer Insights</h2>
 
@@ -272,10 +322,10 @@ export default async function CustomerInsightsPage() {
               <tr className="border-b text-left text-gray-500">
                 <th className="py-3 pr-4">Customer</th>
                 <th className="py-3 pr-4">Email</th>
-                <th className="py-3 pr-4">Phone</th>
+                <th className="py-3 pr-4">Segment</th>
+                <th className="py-3 pr-4">Churn Status</th>
                 <th className="py-3 pr-4">Visits</th>
                 <th className="py-3 pr-4">Spending</th>
-                <th className="py-3 pr-4">Status</th>
                 <th className="py-3">Latest Activity</th>
               </tr>
             </thead>
@@ -283,23 +333,33 @@ export default async function CustomerInsightsPage() {
               {customerInsights.length > 0 ? (
                 customerInsights.map((customer) => (
                   <tr key={customer.id} className="border-b last:border-b-0">
-                    <td className="py-3 pr-4 font-medium">{customer.fullName}</td>
+                    <td className="py-3 pr-4 font-medium">{customer.full_name}</td>
                     <td className="py-3 pr-4">{customer.email}</td>
-                    <td className="py-3 pr-4">{customer.phoneNumber}</td>
-                    <td className="py-3 pr-4">{customer.totalVisits}</td>
                     <td className="py-3 pr-4">
-                      {formatCurrency(customer.totalSpending)}
+                      <span
+                        className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${getSegmentBadgeClass(
+                          customer.segment
+                        )}`}
+                      >
+                        {customer.segment}
+                      </span>
                     </td>
                     <td className="py-3 pr-4">
-                      {customer.isInactiveCustomer
-                        ? "Inactive"
-                        : customer.isActiveCustomer
-                        ? "Active"
-                        : "No Orders"}
+                      <span
+                        className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${getChurnBadgeClass(
+                          customer.churn_status
+                        )}`}
+                      >
+                        {customer.churn_status}
+                      </span>
+                    </td>
+                    <td className="py-3 pr-4">{customer.total_visits}</td>
+                    <td className="py-3 pr-4">
+                      {formatCurrency(customer.total_spending)}
                     </td>
                     <td className="py-3">
-                      {customer.latestTransactionDate
-                        ? formatShortDate(customer.latestTransactionDate)
+                      {customer.latest_transaction_date
+                        ? formatShortDate(customer.latest_transaction_date)
                         : "No activity"}
                     </td>
                   </tr>
@@ -316,7 +376,6 @@ export default async function CustomerInsightsPage() {
         </div>
       </section>
 
-      {/* Recent customer activity + notes */}
       <section className="grid gap-6 xl:grid-cols-2">
         <div className="rounded-xl border bg-white p-6 shadow-sm">
           <h2 className="mb-4 text-lg font-semibold">Recent Customer Activity</h2>
@@ -325,16 +384,19 @@ export default async function CustomerInsightsPage() {
             {recentCustomerActivity.length > 0 ? (
               recentCustomerActivity.map((customer) => (
                 <div key={customer.id} className="rounded-lg border p-4">
-                  <p className="text-sm font-medium">{customer.fullName}</p>
+                  <p className="text-sm font-medium">{customer.full_name}</p>
                   <p className="mt-1 text-sm text-gray-500">
                     Latest order on{" "}
-                    {customer.latestTransactionDate
-                      ? formatShortDate(customer.latestTransactionDate)
+                    {customer.latest_transaction_date
+                      ? formatShortDate(customer.latest_transaction_date)
                       : "N/A"}
                   </p>
                   <p className="mt-1 text-sm text-gray-500">
-                    Last branch: {customer.latestBranchName ?? "N/A"} | Spending:{" "}
-                    {formatCurrency(customer.totalSpending)}
+                    Segment: {customer.segment} | Churn: {customer.churn_status}
+                  </p>
+                  <p className="mt-1 text-sm text-gray-500">
+                    Last branch: {customer.latest_branch_name ?? "N/A"} | Spending:{" "}
+                    {formatCurrency(customer.total_spending)}
                   </p>
                 </div>
               ))
@@ -347,33 +409,42 @@ export default async function CustomerInsightsPage() {
         </div>
 
         <div className="rounded-xl border bg-white p-6 shadow-sm">
-          <h2 className="mb-4 text-lg font-semibold">Customer Notes</h2>
+          <h2 className="mb-4 text-lg font-semibold">Churn Detection Notes</h2>
 
           <div className="space-y-4">
             <div className="rounded-lg border p-4">
               <p className="text-sm font-medium">
-                Active customers are based on purchases within the last 30 days.
+                Active customers purchased within the last 30 days.
               </p>
               <p className="mt-1 text-sm text-gray-500">
-                This helps show which customers are currently engaged with the brand.
+                These customers are currently engaged with the business.
               </p>
             </div>
 
             <div className="rounded-lg border p-4">
               <p className="text-sm font-medium">
-                Repeat customers are customers with more than one recorded visit.
+                At Risk customers have not purchased for 31 to 60 days.
               </p>
               <p className="mt-1 text-sm text-gray-500">
-                This helps measure retention and repeat buying behavior.
+                These customers may need reminders, promos, or follow-up actions.
               </p>
             </div>
 
             <div className="rounded-lg border p-4">
               <p className="text-sm font-medium">
-                Inactive customers are customers with no purchase in the last 30 days.
+                Churned customers have not purchased for more than 60 days.
               </p>
               <p className="mt-1 text-sm text-gray-500">
-                This helps identify customers who may need promos or re-engagement.
+                These customers are strong re-engagement targets.
+              </p>
+            </div>
+
+            <div className="rounded-lg border p-4">
+              <p className="text-sm font-medium">
+                No Orders Yet customers exist in the system but have no transactions.
+              </p>
+              <p className="mt-1 text-sm text-gray-500">
+                These may be newly created profiles or customers not yet converted.
               </p>
             </div>
           </div>

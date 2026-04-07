@@ -1,30 +1,16 @@
-// frontend/app/dashboard/upload-data/upload-form.tsx
-
 "use client";
 
 import { useState } from "react";
 
-type ValidationIssue = {
-  row: number | "header" | "file";
-  field: string;
-  message: string;
-};
-
-type FileValidationResult = {
-  label: string;
-  fileName: string;
-  totalRows: number;
-  isValid: boolean;
-  missingColumns: string[];
-  issues: ValidationIssue[];
-};
+import { CLIENT_BACKEND_BASE_URL } from "@/lib/backend-api";
+import type { CsvFileValidationResult, CsvProcessResponse } from "@/lib/backend-types";
 
 type SaveSummary = {
-  branchesSaved: number;
-  productsSaved: number;
-  customersSaved: number;
-  transactionsSaved: number;
-  transactionItemsSaved: number;
+  branches_saved: number;
+  products_saved: number;
+  customers_saved: number;
+  transactions_saved: number;
+  transaction_items_saved: number;
 };
 
 export default function UploadForm() {
@@ -38,7 +24,7 @@ export default function UploadForm() {
   const [isError, setIsError] = useState(false);
   const [allValid, setAllValid] = useState<boolean | null>(null);
   const [saved, setSaved] = useState<boolean | null>(null);
-  const [results, setResults] = useState<FileValidationResult[]>([]);
+  const [results, setResults] = useState<CsvFileValidationResult[]>([]);
   const [saveSummary, setSaveSummary] = useState<SaveSummary | null>(null);
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -72,25 +58,37 @@ export default function UploadForm() {
         formData.append("branchesFile", branchesFile);
       }
 
-      const response = await fetch("/api/upload-csv", {
+      const response = await fetch(`${CLIENT_BACKEND_BASE_URL}/api/v1/csv/upload`, {
         method: "POST",
         body: formData,
       });
 
-      const data = await response.json();
+      const data = (await response.json()) as CsvProcessResponse | { detail?: string };
 
-      if (!response.ok || !data.success) {
+      if (!response.ok) {
         setIsError(true);
-        setMessage(data.message || "Upload failed.");
+        if ("detail" in data && data.detail) {
+          setMessage(data.detail);
+        } else {
+          setMessage("Upload failed.");
+        }
+        return;
+      }
+
+      const payload = data as CsvProcessResponse;
+
+      if (!payload.success) {
+        setIsError(true);
+        setMessage(payload.message || "Upload failed.");
         return;
       }
 
       setIsError(false);
-      setMessage(data.message || "Process completed.");
-      setAllValid(data.allValid ?? null);
-      setSaved(data.saved ?? null);
-      setResults(data.results || []);
-      setSaveSummary(data.saveSummary || null);
+      setMessage(payload.message || "Process completed.");
+      setAllValid(payload.all_valid ?? null);
+      setSaved(payload.saved ?? null);
+      setResults(payload.results || []);
+      setSaveSummary(payload.save_summary || null);
     } catch (error) {
       setIsError(true);
       setMessage(
@@ -205,6 +203,12 @@ export default function UploadForm() {
         </div>
       )}
 
+      {allValid !== null && !isError && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-700">
+          All Valid: {allValid ? "Yes" : "No"}
+        </div>
+      )}
+
       {saveSummary && (
         <div className="rounded-xl border bg-white p-6 shadow-sm">
           <h2 className="mb-4 text-lg font-semibold">Database Save Summary</h2>
@@ -212,28 +216,28 @@ export default function UploadForm() {
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             <div className="rounded-lg border p-4">
               <p className="text-xs text-gray-500">Branches Saved</p>
-              <p className="mt-1 text-lg font-semibold">{saveSummary.branchesSaved}</p>
+              <p className="mt-1 text-lg font-semibold">{saveSummary.branches_saved}</p>
             </div>
 
             <div className="rounded-lg border p-4">
               <p className="text-xs text-gray-500">Products Saved</p>
-              <p className="mt-1 text-lg font-semibold">{saveSummary.productsSaved}</p>
+              <p className="mt-1 text-lg font-semibold">{saveSummary.products_saved}</p>
             </div>
 
             <div className="rounded-lg border p-4">
               <p className="text-xs text-gray-500">Customers Saved</p>
-              <p className="mt-1 text-lg font-semibold">{saveSummary.customersSaved}</p>
+              <p className="mt-1 text-lg font-semibold">{saveSummary.customers_saved}</p>
             </div>
 
             <div className="rounded-lg border p-4">
               <p className="text-xs text-gray-500">Transactions Saved</p>
-              <p className="mt-1 text-lg font-semibold">{saveSummary.transactionsSaved}</p>
+              <p className="mt-1 text-lg font-semibold">{saveSummary.transactions_saved}</p>
             </div>
 
             <div className="rounded-lg border p-4">
               <p className="text-xs text-gray-500">Transaction Items Saved</p>
               <p className="mt-1 text-lg font-semibold">
-                {saveSummary.transactionItemsSaved}
+                {saveSummary.transaction_items_saved}
               </p>
             </div>
           </div>
@@ -244,36 +248,36 @@ export default function UploadForm() {
         <div className="space-y-6">
           {results.map((result) => (
             <div
-              key={`${result.label}-${result.fileName}`}
+              key={`${result.label}-${result.file_name}`}
               className="rounded-xl border bg-white p-6 shadow-sm"
             >
               <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                 <div>
                   <h2 className="text-lg font-semibold">{result.label}</h2>
-                  <p className="text-sm text-gray-600">{result.fileName}</p>
+                  <p className="text-sm text-gray-600">{result.file_name}</p>
                 </div>
 
                 <div
                   className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
-                    result.isValid
+                    result.is_valid
                       ? "bg-green-100 text-green-700"
                       : "bg-red-100 text-red-700"
                   }`}
                 >
-                  {result.isValid ? "Valid" : "Has Issues"}
+                  {result.is_valid ? "Valid" : "Has Issues"}
                 </div>
               </div>
 
               <div className="mb-4 grid gap-4 md:grid-cols-3">
                 <div className="rounded-lg border p-4">
                   <p className="text-xs text-gray-500">Total Rows Checked</p>
-                  <p className="mt-1 text-lg font-semibold">{result.totalRows}</p>
+                  <p className="mt-1 text-lg font-semibold">{result.total_rows}</p>
                 </div>
 
                 <div className="rounded-lg border p-4">
                   <p className="text-xs text-gray-500">Missing Columns</p>
                   <p className="mt-1 text-lg font-semibold">
-                    {result.missingColumns.length}
+                    {result.missing_columns.length}
                   </p>
                 </div>
 
@@ -283,13 +287,13 @@ export default function UploadForm() {
                 </div>
               </div>
 
-              {result.missingColumns.length > 0 && (
+              {result.missing_columns.length > 0 && (
                 <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4">
                   <h3 className="mb-2 text-sm font-semibold text-red-700">
                     Missing Required Columns
                   </h3>
                   <ul className="list-inside list-disc text-sm text-red-700">
-                    {result.missingColumns.map((column) => (
+                    {result.missing_columns.map((column) => (
                       <li key={column}>{column}</li>
                     ))}
                   </ul>
@@ -302,7 +306,7 @@ export default function UploadForm() {
                   <div className="space-y-3">
                     {result.issues.map((issue, index) => (
                       <div
-                        key={`${result.fileName}-${issue.field}-${issue.row}-${index}`}
+                        key={`${result.file_name}-${issue.field}-${issue.row}-${index}`}
                         className="rounded-lg border p-4"
                       >
                         <p className="text-sm font-medium">{issue.message}</p>
