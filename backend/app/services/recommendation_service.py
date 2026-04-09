@@ -4,15 +4,158 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.schemas.next_best_action import (
+    BranchPerformanceMetric,
+    NextBestActionMetrics,
+    NextBestActionsRequest,
+    ProductPerformanceMetric,
+    RecommendationSummaryMetric,
+)
+from app.schemas.ai import AISummaryResponse
 from app.services import analytics_service
-from app.services.ai_service import build_ai_summary, build_next_best_actions
+from app.services.next_best_action_service import generate_next_best_actions
 
 
 def _format_currency(value: float) -> str:
+    """
+    Format a number as Philippine peso currency text.
+    """
     return f"PHP {value:,.2f}"
 
 
+def _build_ai_summary(
+    dashboard_summary: dict[str, Any],
+    recommendations: list[dict[str, Any]],
+) -> AISummaryResponse:
+    """
+    Build a structured AI-style business summary that matches
+    the real AISummaryResponse schema.
+    """
+    total_revenue = dashboard_summary.get("total_revenue", 0)
+    total_orders = dashboard_summary.get("total_orders", 0)
+    repeat_customer_rate = dashboard_summary.get("repeat_customer_rate", 0)
+
+    high_priority_recommendations = [
+        recommendation
+        for recommendation in recommendations
+        if recommendation["priority"] == "High"
+    ]
+
+    top_focus = (
+        high_priority_recommendations[0]["title"]
+        if high_priority_recommendations
+        else (recommendations[0]["title"] if recommendations else "General business review")
+    )
+
+    highlights = [
+        f"Total revenue is {_format_currency(total_revenue)}.",
+        f"Total recorded orders are {total_orders}.",
+        f"Repeat customer rate is {repeat_customer_rate:.1f}%.",
+    ]
+
+    risks = []
+    if high_priority_recommendations:
+        risks.append(
+            f"There are {len(high_priority_recommendations)} high-priority recommendation(s) that need attention."
+        )
+    else:
+        risks.append("No high-priority recommendation is currently flagged.")
+
+    return AISummaryResponse(
+        title="AI Business Summary",
+        summary=(
+            f"Business snapshot: {_format_currency(total_revenue)} revenue from "
+            f"{total_orders} orders with {repeat_customer_rate:.1f}% repeat-customer rate. "
+            f"Top focus: {top_focus}."
+        ),
+        highlights=highlights,
+        risks=risks,
+        focus_area=top_focus,
+    )
+
+
+def _build_branch_metric(branch: dict[str, Any] | None) -> BranchPerformanceMetric:
+    """
+    Convert branch analytics into the strict Step 31 branch metric schema.
+    """
+    if not branch:
+        return BranchPerformanceMetric(
+            branch_name="N/A",
+            total_revenue=0.0,
+            repeat_customer_rate=0.0,
+        )
+
+    return BranchPerformanceMetric(
+        branch_name=branch.get("branch_name", "N/A"),
+        total_revenue=float(branch.get("total_revenue", 0.0)),
+        repeat_customer_rate=float(branch.get("repeat_customer_rate", 0.0)),
+    )
+
+
+def _build_product_metric(product: dict[str, Any] | None) -> ProductPerformanceMetric:
+    """
+    Convert product analytics into the strict Step 31 product metric schema.
+    """
+    if not product:
+        return ProductPerformanceMetric(
+            product_name="N/A",
+            total_revenue=0.0,
+        )
+
+    return ProductPerformanceMetric(
+        product_name=product.get("product_name", "N/A"),
+        total_revenue=float(product.get("total_revenue", 0.0)),
+    )
+
+
+def _build_next_best_action_metrics(
+    *,
+    dashboard_data: dict[str, Any],
+    top_branch: dict[str, Any] | None,
+    weakest_branch: dict[str, Any] | None,
+    top_product: dict[str, Any] | None,
+    weakest_product: dict[str, Any] | None,
+    inactive_customers: int,
+    churned_customers: int,
+    at_risk_customers: int,
+    loyal_customers: int,
+    recommendation_summary: dict[str, int],
+) -> NextBestActionMetrics:
+    """
+    Build the exact Step 31 structured metrics payload from existing analytics.
+    """
+    dashboard_summary = dashboard_data.get("summary", {})
+
+    return NextBestActionMetrics(
+        total_revenue=float(dashboard_summary.get("total_revenue", 0.0)),
+        total_orders=int(dashboard_summary.get("total_orders", 0)),
+        average_order_value=float(dashboard_summary.get("average_order_value", 0.0)),
+        repeat_customer_rate=float(dashboard_summary.get("repeat_customer_rate", 0.0)),
+        inactive_customers=inactive_customers,
+        churned_customers=churned_customers,
+        at_risk_customers=at_risk_customers,
+        loyal_customers=loyal_customers,
+        top_branch=_build_branch_metric(top_branch),
+        weakest_branch=_build_branch_metric(weakest_branch),
+        top_product=_build_product_metric(top_product),
+        weakest_product=_build_product_metric(weakest_product),
+        recommendation_summary=RecommendationSummaryMetric(
+            total_recommendations=int(
+                recommendation_summary.get("total_recommendations", 0)
+            ),
+            high_priority_count=int(recommendation_summary.get("high_priority_count", 0)),
+            medium_priority_count=int(
+                recommendation_summary.get("medium_priority_count", 0)
+            ),
+            low_priority_count=int(recommendation_summary.get("low_priority_count", 0)),
+        ),
+    )
+
+
 def get_recommendations(db: Session) -> dict[str, Any]:
+    """
+    Build the full recommendations response for the frontend.
+    """
     customer_data = analytics_service.get_customer_insights(db)
     branch_data = analytics_service.get_branch_insights(db)
     product_data = analytics_service.get_product_insights(db)
@@ -36,9 +179,15 @@ def get_recommendations(db: Session) -> dict[str, Any]:
         and customer["churn_status"] == "Active"
     ]
 
-    top_branch = max(branches, key=lambda branch: branch["total_revenue"]) if branches else None
+    top_branch = (
+        max(branches, key=lambda branch: branch["total_revenue"])
+        if branches
+        else None
+    )
     weakest_branch = (
-        min(branches, key=lambda branch: branch["total_revenue"]) if branches else None
+        min(branches, key=lambda branch: branch["total_revenue"])
+        if branches
+        else None
     )
     lowest_repeat_branch = (
         min(branches, key=lambda branch: branch["repeat_customer_rate"])
@@ -46,9 +195,15 @@ def get_recommendations(db: Session) -> dict[str, Any]:
         else None
     )
 
-    top_product = max(products, key=lambda product: product["total_revenue"]) if products else None
+    top_product = (
+        max(products, key=lambda product: product["total_revenue"])
+        if products
+        else None
+    )
     weakest_product = (
-        min(products, key=lambda product: product["total_revenue"]) if products else None
+        min(products, key=lambda product: product["total_revenue"])
+        if products
+        else None
     )
 
     recommendations: list[dict[str, Any]] = []
@@ -124,9 +279,7 @@ def get_recommendations(db: Session) -> dict[str, Any]:
                 "id": "branch-repeat-rate-improvement",
                 "category": "Branch",
                 "priority": "Medium",
-                "title": (
-                    f"Improve repeat customer rate in {lowest_repeat_branch['branch_name']}"
-                ),
+                "title": f"Improve repeat customer rate in {lowest_repeat_branch['branch_name']}",
                 "reason": (
                     f"{lowest_repeat_branch['branch_name']} has the lowest repeat customer rate at "
                     f"{lowest_repeat_branch['repeat_customer_rate']:.1f}%."
@@ -240,11 +393,39 @@ def get_recommendations(db: Session) -> dict[str, Any]:
         if recommendation["category"] == "Product"
     ]
 
-    ai_summary = build_ai_summary(
-        dashboard_summary=dashboard_data,
+    ai_summary = _build_ai_summary(
+        dashboard_summary=dashboard_data.get("summary", {}),
         recommendations=sorted_recommendations,
     )
-    next_best_actions = build_next_best_actions(recommendations=sorted_recommendations)
+
+    next_best_action_metrics = _build_next_best_action_metrics(
+        dashboard_data=dashboard_data,
+        top_branch=top_branch,
+        weakest_branch=weakest_branch,
+        top_product=top_product,
+        weakest_product=weakest_product,
+        inactive_customers=int(
+            dashboard_data.get("summary", {}).get("inactive_customer_count", 0)
+        ),
+        churned_customers=len(churned_customers),
+        at_risk_customers=len(at_risk_customers),
+        loyal_customers=len(loyal_customers),
+        recommendation_summary=summary,
+    )
+
+    next_best_actions_response = generate_next_best_actions(
+        NextBestActionsRequest(
+            metrics=next_best_action_metrics,
+            max_actions=3,
+            notes=(
+                "These actions are generated from computed dashboard, branch, customer, "
+                "product, and recommendation metrics."
+            ),
+        )
+    )
+    next_best_actions = [
+        action.model_dump() for action in next_best_actions_response.actions
+    ]
 
     return {
         "summary": summary,
@@ -252,6 +433,7 @@ def get_recommendations(db: Session) -> dict[str, Any]:
         "customer_recommendations": customer_recommendations,
         "branch_recommendations": branch_recommendations,
         "product_recommendations": product_recommendations,
-        "ai_summary": ai_summary,
+        "ai_summary": ai_summary.model_dump(),
         "next_best_actions": next_best_actions,
+        "next_best_actions_used_fallback": next_best_actions_response.used_fallback,
     }

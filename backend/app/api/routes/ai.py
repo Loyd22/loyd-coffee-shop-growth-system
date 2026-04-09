@@ -1,27 +1,36 @@
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+# backend/app/api/routes/ai.py
 
-from app.core.database import get_db
-from app.schemas.ai import AISummaryResponse, NextBestActionsResponse
-from app.services.ai_service import generated_at_iso
-from app.services.recommendation_service import get_recommendations
+"""
+This file exposes the AI summary API endpoint.
 
-router = APIRouter(prefix="/ai", tags=["ai"])
+Why this file exists:
+- It receives requests from the frontend
+- It validates them using schemas
+- It calls the AI service
+- It returns a structured response
+"""
+
+from fastapi import APIRouter
+
+from app.schemas.ai import AISummaryRequest, AISummaryResponse
+from app.schemas.next_best_action import NextBestActionsRequest, NextBestActionsResponse
+from app.services.ai_service import generate_ai_summary
+from app.services.next_best_action_service import generate_next_best_actions
+
+router = APIRouter(prefix="/ai", tags=["AI"])
 
 
 @router.post("/summary", response_model=AISummaryResponse)
-def generate_ai_summary(db: Session = Depends(get_db)) -> AISummaryResponse:
-    recommendation_payload = get_recommendations(db)
-    return AISummaryResponse(
-        summary=recommendation_payload["ai_summary"],
-        generated_at=generated_at_iso(),
-    )
+def create_ai_summary(payload: AISummaryRequest) -> AISummaryResponse:
+    """
+    Generate a grounded AI summary from structured business metrics.
+    """
+    return generate_ai_summary(payload)
 
 
 @router.post("/next-best-actions", response_model=NextBestActionsResponse)
-def generate_next_best_actions(db: Session = Depends(get_db)) -> NextBestActionsResponse:
-    recommendation_payload = get_recommendations(db)
-    return NextBestActionsResponse(
-        actions=recommendation_payload["next_best_actions"],
-        generated_at=generated_at_iso(),
-    )
+def create_next_best_actions(payload: NextBestActionsRequest) -> NextBestActionsResponse:
+    """
+    Generate grounded next-best-action suggestions from structured business metrics.
+    """
+    return generate_next_best_actions(payload)

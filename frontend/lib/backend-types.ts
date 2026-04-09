@@ -152,6 +152,63 @@ export type RecommendationItem = {
   action: string;
 };
 
+export type NextBestActionPriority = "High" | "Medium" | "Low";
+export type NextBestActionCategory = "Customer" | "Branch" | "Product" | "Overall";
+
+export type BranchPerformanceMetric = {
+  branch_name: string;
+  total_revenue: number;
+  repeat_customer_rate: number;
+};
+
+export type ProductPerformanceMetric = {
+  product_name: string;
+  total_revenue: number;
+};
+
+export type RecommendationSummaryMetric = {
+  total_recommendations: number;
+  high_priority_count: number;
+  medium_priority_count: number;
+  low_priority_count: number;
+};
+
+export type NextBestActionMetrics = {
+  total_revenue: number;
+  total_orders: number;
+  average_order_value: number;
+  repeat_customer_rate: number;
+  inactive_customers: number;
+  churned_customers: number;
+  at_risk_customers: number;
+  loyal_customers: number;
+  top_branch: BranchPerformanceMetric;
+  weakest_branch: BranchPerformanceMetric;
+  top_product: ProductPerformanceMetric;
+  weakest_product: ProductPerformanceMetric;
+  recommendation_summary: RecommendationSummaryMetric;
+};
+
+export type NextBestActionsRequest = {
+  metrics: NextBestActionMetrics;
+  max_actions?: number;
+  notes?: string;
+};
+
+export type NextBestActionItem = {
+  title: string;
+  summary: string;
+  reasons: string[];
+  recommended_action: string;
+  priority: NextBestActionPriority;
+  category: NextBestActionCategory;
+};
+
+export type NextBestActionsResponse = {
+  actions: NextBestActionItem[];
+  used_fallback: boolean;
+};
+
 export type RecommendationsResponse = {
   summary: {
     total_recommendations: number;
@@ -163,8 +220,9 @@ export type RecommendationsResponse = {
   customer_recommendations: RecommendationItem[];
   branch_recommendations: RecommendationItem[];
   product_recommendations: RecommendationItem[];
-  ai_summary: string;
-  next_best_actions: string[];
+  ai_summary: AISummaryResponse;
+  next_best_actions: NextBestActionItem[];
+  next_best_actions_used_fallback: boolean;
 };
 
 export type CsvValidationIssue = {
@@ -195,4 +253,20 @@ export type CsvProcessResponse = {
     transactions_saved: number;
     transaction_items_saved: number;
   } | null;
+};
+
+export type SummaryType = "dashboard" | "branch" | "customer" | "product";
+
+export type AISummaryRequest = {
+  summary_type: SummaryType;
+  metrics: Record<string, unknown>;
+  notes?: string;
+};
+
+export type AISummaryResponse = {
+  title: string;
+  summary: string;
+  highlights: string[];
+  risks: string[];
+  focus_area: string;
 };

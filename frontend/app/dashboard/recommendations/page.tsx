@@ -1,14 +1,13 @@
 import { redirect } from "next/navigation";
 
 import DashboardLayout from "@/components/dashboard-layout";
-import { fetchBackendJson } from "@/lib/backend-api";
-import type { RecommendationsResponse } from "@/lib/backend-types";
+import { fetchRecommendations } from "@/lib/backend-api";
+import type { NextBestActionCategory, RecommendationsResponse } from "@/lib/backend-types";
 import { createClient } from "@/lib/supabase/server";
 
-type RecommendationPriority = "High" | "Medium" | "Low";
 type RecommendationCategory = "Customer" | "Branch" | "Product";
 
-function getPriorityBadgeClass(priority: RecommendationPriority): string {
+function getPriorityBadgeClass(priority: "High" | "Medium" | "Low"): string {
   switch (priority) {
     case "High":
       return "bg-red-100 text-red-700";
@@ -34,6 +33,23 @@ function getCategoryBadgeClass(category: RecommendationCategory): string {
   }
 }
 
+function getNextBestActionCategoryBadgeClass(
+  category: NextBestActionCategory
+): string {
+  switch (category) {
+    case "Customer":
+      return "bg-green-100 text-green-700";
+    case "Branch":
+      return "bg-purple-100 text-purple-700";
+    case "Product":
+      return "bg-blue-100 text-blue-700";
+    case "Overall":
+      return "bg-gray-100 text-gray-700";
+    default:
+      return "bg-gray-100 text-gray-700";
+  }
+}
+
 export default async function RecommendationsPage() {
   const supabase = await createClient();
 
@@ -49,9 +65,7 @@ export default async function RecommendationsPage() {
   let loadError: string | null = null;
 
   try {
-    recommendationData = await fetchBackendJson<RecommendationsResponse>(
-      "/api/v1/recommendations"
-    );
+    recommendationData = await fetchRecommendations();
   } catch (error) {
     loadError =
       error instanceof Error
@@ -70,8 +84,14 @@ export default async function RecommendationsPage() {
   const customerRecommendations = recommendationData?.customer_recommendations ?? [];
   const branchRecommendations = recommendationData?.branch_recommendations ?? [];
   const productRecommendations = recommendationData?.product_recommendations ?? [];
-  const aiSummary = recommendationData?.ai_summary ?? "No AI summary available yet.";
+  const aiSummary = recommendationData?.ai_summary;
+  const aiSummaryText = aiSummary?.summary ?? "No AI summary available yet.";
+  const aiHighlights = aiSummary?.highlights ?? [];
+  const aiRisks = aiSummary?.risks ?? [];
+  const aiFocusArea = aiSummary?.focus_area ?? null;
   const nextBestActions = recommendationData?.next_best_actions ?? [];
+  const usedNextBestActionFallback =
+    recommendationData?.next_best_actions_used_fallback ?? false;
 
   return (
     <DashboardLayout
@@ -109,16 +129,80 @@ export default async function RecommendationsPage() {
       <section className="mb-8 grid gap-6 xl:grid-cols-2">
         <div className="rounded-xl border bg-white p-6 shadow-sm">
           <h2 className="mb-3 text-lg font-semibold">AI Business Summary</h2>
-          <p className="text-sm text-gray-700">{aiSummary}</p>
+          <p className="text-sm text-gray-700">{aiSummaryText}</p>
+          {aiFocusArea && (
+            <p className="mt-3 text-sm text-gray-700">
+              <span className="font-medium">Focus Area:</span> {aiFocusArea}
+            </p>
+          )}
+          {aiHighlights.length > 0 && (
+            <div className="mt-4">
+              <h3 className="text-sm font-semibold text-gray-800">Highlights</h3>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-700">
+                {aiHighlights.map((item, index) => (
+                  <li key={`${item}-${index}`}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {aiRisks.length > 0 && (
+            <div className="mt-4">
+              <h3 className="text-sm font-semibold text-gray-800">Risks</h3>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-700">
+                {aiRisks.map((item, index) => (
+                  <li key={`${item}-${index}`}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
 
         <div className="rounded-xl border bg-white p-6 shadow-sm">
           <h2 className="mb-3 text-lg font-semibold">Next Best Actions</h2>
+          {usedNextBestActionFallback && (
+            <p className="mb-3 rounded-md border border-yellow-200 bg-yellow-50 px-3 py-2 text-xs text-yellow-800">
+              AI output was unavailable or invalid. Showing validated fallback actions.
+            </p>
+          )}
           {nextBestActions.length > 0 ? (
             <div className="space-y-3">
               {nextBestActions.map((item, index) => (
-                <div key={`${item}-${index}`} className="rounded-lg border p-4 text-sm">
-                  {item}
+                <div
+                  key={`${item.title}-${item.category}-${index}`}
+                  className="rounded-lg border p-4 text-sm"
+                >
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <span
+                      className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${getNextBestActionCategoryBadgeClass(
+                        item.category
+                      )}`}
+                    >
+                      {item.category}
+                    </span>
+                    <span
+                      className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${getPriorityBadgeClass(
+                        item.priority
+                      )}`}
+                    >
+                      {item.priority}
+                    </span>
+                  </div>
+
+                  <p className="font-medium text-gray-900">{item.title}</p>
+                  <p className="mt-1 text-gray-600">{item.summary}</p>
+
+                  {item.reasons.length > 0 && (
+                    <ul className="mt-2 list-disc space-y-1 pl-5 text-gray-600">
+                      {item.reasons.map((reason, reasonIndex) => (
+                        <li key={`${item.title}-${reasonIndex}`}>{reason}</li>
+                      ))}
+                    </ul>
+                  )}
+
+                  <p className="mt-2 text-gray-700">
+                    <span className="font-medium">Action:</span>{" "}
+                    {item.recommended_action}
+                  </p>
                 </div>
               ))}
             </div>
